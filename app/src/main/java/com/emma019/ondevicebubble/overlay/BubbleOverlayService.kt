@@ -16,8 +16,8 @@ import androidx.core.app.NotificationCompat
 import com.emma019.ondevicebubble.MainActivity
 import com.emma019.ondevicebubble.R
 import com.emma019.ondevicebubble.accessibility.TranslateAccessibilityService
+import com.emma019.ondevicebubble.translate.HybridTranslator
 import com.emma019.ondevicebubble.translate.LanguageDetector
-import com.emma019.ondevicebubble.translate.MlKitTranslationEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -26,17 +26,19 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Always-on path: Accessibility screen-change → debounce → language id →
- * translate to Japanese → bubbles. Manual 訳 still works. Auto is ON by default.
+ * Auto → ML Kit (fast).
+ * Manual 訳 → ML Kit + Local LLM on long blocks when model present.
+ * 磨 → re-polish current bubbles with Local LLM.
  */
 class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChangeListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var overlay: OverlayBubbleManager
     private val detector = LanguageDetector()
-    private val engine = MlKitTranslationEngine()
+    private lateinit var hybrid: HybridTranslator
     private var busy = false
     private var autoEnabled = true
     private var lastFingerprint: String? = null
+    private var lastBlocks: List<TranslatedBlock> = emptyList()
     private val targetLang = "ja"
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -44,6 +46,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
     override fun onCreate() {
         super.onCreate()
         overlay = OverlayBubbleManager(this)
+        hybrid = HybridTranslator(this)
         createChannel()
     }
 
@@ -60,9 +63,13 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
                 }
                 TranslateAccessibilityService.screenChangeListener = this
                 showControlPanel()
-                toast(getString(R.string.overlay_auto_ready))
-                // First paint for current screen.
-                scope.launch { translateOnce(silent = true) }
+                val llmHint = if (hybrid.hasLocalModel()) {
+                    getString(R.string.overlay_hybrid_llm_ready)
+                } else {
+                    getString(R.string.overlay_hybrid_llm_missing)
+                }
+                toast("${getString(R.string.overlay_auto_ready)}\n$llmHint")
+                scope.launch { translateOnce(silent = true, preferQuality = false) }
             }
         }
         return START_STICKY
@@ -70,7 +77,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
 
     override fun onScreenMaybeChanged() {
         if (!autoEnabled) return
-        scope.launch { translateOnce(silent = true) }
+        scope.launch { translateOnce(silent = true, preferQuality = false) }
     }
 
     private fun showControlPanel() {
@@ -84,19 +91,23 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
                     else getString(R.string.overlay_auto_off),
                 )
                 if (autoEnabled) {
-                    scope.launch { translateOnce(silent = true) }
+                    scope.launch { translateOnce(silent = true, preferQuality = false) }
                 }
             },
-            onTranslate = { scope.launch { translateOnce(silent = false) } },
+            onTranslate = {
+                scope.launch { translateOnce(silent = false, preferQuality = true) }
+            },
+            onPolish = { scope.launch { polishWithLlm() } },
             onClear = {
                 overlay.clearTranslations()
                 lastFingerprint = null
+                lastBlocks = emptyList()
             },
             onStop = { stopSelfSafely() },
         )
     }
 
-    private suspend fun translateOnce(silent: Boolean) {
+    private suspend fun translateOnce(silent: Boolean, preferQuality: Boolean) {
         if (busy) return
         val a11y = TranslateAccessibilityService.instance
         if (a11y == null) {
@@ -107,53 +118,114 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
         try {
             if (!silent) toast("Grabbing text…")
             val blocks = withContext(Dispatchers.Default) { a11y.snapshotTextBlocks() }
-            val fingerprint = blocks.joinToString("\n") { it.text }.hashCode().toString()
-            if (fingerprint == lastFingerprint) return
+            val fingerprint = blocks.joinToString("\n") { it.text }.hashCode().toString() +
+                if (preferQuality) ":q" else ":f"
+            if (silent && fingerprint == lastFingerprint) return
             if (blocks.isEmpty()) {
                 if (!silent) toast("No text nodes")
                 overlay.clearTranslations()
                 lastFingerprint = fingerprint
+                lastBlocks = emptyList()
                 return
             }
             val limited = blocks
                 .filter { it.text.length >= 2 }
                 .sortedByDescending { it.text.length }
-                .take(40)
+                .take(if (preferQuality) 24 else 40)
 
             val prepared = withContext(Dispatchers.Default) {
                 limited.mapNotNull { block ->
                     val lang = runCatching { detector.detect(block.text) }.getOrDefault("und")
                     if (lang == "ja") return@mapNotNull null
                     val source = if (lang == "und") "en" else lang
-                    if (engine.mapLang(source) == null) return@mapNotNull null
+                    if (hybrid.mapLang(source) == null) return@mapNotNull null
                     block to source
                 }
             }
             if (prepared.isEmpty()) {
                 overlay.clearTranslations()
                 lastFingerprint = fingerprint
+                lastBlocks = emptyList()
                 if (!silent) toast("Nothing to translate")
                 return
             }
 
-            if (!silent) toast("Translating ${prepared.size}…")
+            if (!silent) {
+                val mode = if (preferQuality && hybrid.hasLocalModel()) "ML Kit+LLM" else "ML Kit"
+                toast("Translating ${prepared.size} ($mode)…")
+            }
             val translated = withContext(Dispatchers.Default) {
                 prepared.map { (block, source) ->
                     val out = runCatching {
-                        engine.translate(block.text, source, targetLang)
+                        hybrid.translateBlock(
+                            text = block.text,
+                            sourceLang = source,
+                            targetLang = targetLang,
+                            preferQuality = preferQuality,
+                        )
                     }.getOrElse { err ->
                         Log.e(TAG, "translate failed ($source)", err)
                         block.text
                     }
-                    TranslatedBlock(original = block, translated = out)
+                    TranslatedBlock(original = block, translated = out, sourceLang = source)
                 }
             }
+            lastBlocks = translated
             overlay.showTranslations(translated)
             lastFingerprint = fingerprint
             if (!silent) toast("Done: ${translated.size}")
         } catch (t: Throwable) {
             Log.e(TAG, "translateOnce failed", t)
             if (!silent) toast(t.message ?: t.toString())
+        } finally {
+            busy = false
+        }
+    }
+
+    private suspend fun polishWithLlm() {
+        if (busy) return
+        if (!hybrid.hasLocalModel()) {
+            toast(getString(R.string.overlay_hybrid_llm_missing))
+            return
+        }
+        if (lastBlocks.isEmpty()) {
+            toast("先に訳してから磨を押して")
+            return
+        }
+        busy = true
+        try {
+            toast(getString(R.string.overlay_polishing))
+            val ok = withContext(Dispatchers.Default) {
+                hybrid.ensureLlm { msg ->
+                    scope.launch { toast(msg) }
+                }
+            }
+            if (!ok) {
+                toast("Local LLM failed to load")
+                return
+            }
+            val polished = withContext(Dispatchers.Default) {
+                lastBlocks
+                    .sortedByDescending { it.original.text.length }
+                    .take(12)
+                    .map { block ->
+                        val out = runCatching {
+                            hybrid.translateQuality(
+                                block.original.text,
+                                block.sourceLang,
+                                targetLang,
+                            )
+                        }.getOrElse { block.translated }
+                        block.translated = out
+                        block
+                    }
+            }
+            // Keep full list order; polished items already mutated.
+            overlay.showTranslations(lastBlocks)
+            toast("Polished ${polished.size} with Local LLM")
+        } catch (t: Throwable) {
+            Log.e(TAG, "polish failed", t)
+            toast(t.message ?: t.toString())
         } finally {
             busy = false
         }
@@ -172,7 +244,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.overlay_notification_title))
-            .setContentText(getString(R.string.overlay_notification_text_auto))
+            .setContentText(getString(R.string.overlay_notification_text_hybrid))
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentIntent(open)
             .setOngoing(true)
@@ -205,7 +277,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
         TranslateAccessibilityService.screenChangeListener = null
         runCatching { overlay.dispose() }
         runCatching { detector.close() }
-        runCatching { engine.close() }
+        runCatching { hybrid.close() }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -215,7 +287,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
         scope.cancel()
         runCatching { overlay.dispose() }
         runCatching { detector.close() }
-        runCatching { engine.close() }
+        runCatching { hybrid.close() }
         super.onDestroy()
     }
 

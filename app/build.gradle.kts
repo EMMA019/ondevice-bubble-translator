@@ -11,8 +11,8 @@ android {
         applicationId = "com.emma019.ondevicebubble"
         minSdk = 26
         targetSdk = 35
-        versionCode = 4
-        versionName = "0.4.0-auto"
+        versionCode = 5
+        versionName = "0.5.0-hybrid"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
