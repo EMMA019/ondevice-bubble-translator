@@ -12,23 +12,27 @@ import android.content.pm.ServiceInfo
 import android.media.projection.MediaProjection
 import android.media.projection.MediaProjectionManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
+import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.emma019.ondevicebubble.MainActivity
 import com.emma019.ondevicebubble.R
-import com.emma019.ondevicebubble.translate.EngineRegistry
 import com.emma019.ondevicebubble.translate.MlKitTranslationEngine
 import com.emma019.ondevicebubble.translate.TranslationEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 class BubbleOverlayService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+    private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var overlay: OverlayBubbleManager
     private var projection: MediaProjection? = null
     private var captor: ScreenCaptor? = null
@@ -59,62 +63,102 @@ class BubbleOverlayService : Service() {
                     intent.getParcelableExtra(EXTRA_RESULT_DATA)
                 }
                 if (data == null) {
+                    toast("Missing capture permission data")
                     stopSelfSafely()
                     return START_NOT_STICKY
                 }
                 startAsForeground()
                 val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                projection?.stop()
-                projection = mpm.getMediaProjection(resultCode, data).also { mp ->
-                    mp.registerCallback(object : MediaProjection.Callback() {
-                        override fun onStop() {
-                            stopSelfSafely()
-                        }
-                    }, null)
+                runCatching { projection?.stop() }
+                try {
+                    val mp = mpm.getMediaProjection(resultCode, data)
+                    mp.registerCallback(
+                        object : MediaProjection.Callback() {
+                            override fun onStop() {
+                                Log.w(TAG, "MediaProjection stopped")
+                                mainHandler.post {
+                                    toast("Screen capture ended — start overlay again")
+                                    stopSelfSafely()
+                                }
+                            }
+                        },
+                        mainHandler,
+                    )
+                    projection = mp
                     captor = ScreenCaptor(this, mp)
+                    engine = MlKitTranslationEngine()
+                    overlay.showControls(
+                        onTranslate = { scope.launch { translateOnce() } },
+                        onClear = { overlay.clearTranslations() },
+                        onStop = { stopSelfSafely() },
+                    )
+                    toast("Ready: tap 訳")
+                } catch (t: Throwable) {
+                    Log.e(TAG, "Failed to start projection", t)
+                    toast("Capture start failed: ${t.message}")
+                    stopSelfSafely()
                 }
-                engine = EngineRegistry.all(this).firstOrNull { it.id == "mlkit" } ?: MlKitTranslationEngine()
-                overlay.showControls(
-                    onTranslate = { scope.launch { translateOnce() } },
-                    onClear = { overlay.clearTranslations() },
-                    onStop = { stopSelfSafely() },
-                )
-                Toast.makeText(this, R.string.overlay_notification_text, Toast.LENGTH_SHORT).show()
             }
         }
         return START_STICKY
     }
 
     private suspend fun translateOnce() {
-        if (busy) return
-        val capture = captor ?: return
+        if (busy) {
+            toast("Already translating…")
+            return
+        }
+        val capture = captor
+        if (capture == null) {
+            toast("Capture not ready — restart overlay")
+            return
+        }
         busy = true
         try {
-            Toast.makeText(this, R.string.status_translating, Toast.LENGTH_SHORT).show()
+            toast("Capturing…")
+            // Hide our own controls so OCR does not read them.
+            overlay.removeControls()
+            delay(120)
             val bitmap = capture.capture()
+            toast("OCR…")
             val blocks = withContext(Dispatchers.Default) { ocr.recognize(bitmap) }
             bitmap.recycle()
+            Log.i(TAG, "OCR blocks=${blocks.size}")
             if (blocks.isEmpty()) {
-                Toast.makeText(this, "No text found", Toast.LENGTH_SHORT).show()
+                toast("No text found — try Entire screen + English page")
                 return
             }
-            withContext(Dispatchers.Default) {
-                engine.prepare {}
-            }
+            val limited = blocks.take(24)
+            toast("Translating ${limited.size} blocks…")
+            withContext(Dispatchers.Default) { engine.prepare {} }
             val translated = withContext(Dispatchers.Default) {
-                blocks.map { block ->
+                limited.map { block ->
                     val out = runCatching {
                         engine.translate(block.text, "en", "ja")
-                    }.getOrElse { block.text }
+                    }.getOrElse { err ->
+                        Log.e(TAG, "translate failed for: ${block.text.take(40)}", err)
+                        block.text
+                    }
                     TranslatedBlock(original = block, translated = out)
                 }
             }
             overlay.showTranslations(translated)
+            toast("Done: ${translated.size} bubbles")
         } catch (t: Throwable) {
-            Toast.makeText(this, t.message ?: t.toString(), Toast.LENGTH_LONG).show()
+            Log.e(TAG, "translateOnce failed", t)
+            toast(t.message ?: t.toString())
         } finally {
+            overlay.showControls(
+                onTranslate = { scope.launch { translateOnce() } },
+                onClear = { overlay.clearTranslations() },
+                onStop = { stopSelfSafely() },
+            )
             busy = false
         }
+    }
+
+    private fun toast(msg: String) {
+        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
     }
 
     private fun startAsForeground() {
@@ -156,10 +200,10 @@ class BubbleOverlayService : Service() {
     }
 
     private fun stopSelfSafely() {
-        overlay.dispose()
-        ocr.close()
-        engine.close()
-        projection?.stop()
+        runCatching { overlay.dispose() }
+        runCatching { ocr.close() }
+        runCatching { engine.close() }
+        runCatching { projection?.stop() }
         projection = null
         captor = null
         stopForeground(STOP_FOREGROUND_REMOVE)
@@ -168,14 +212,15 @@ class BubbleOverlayService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
-        overlay.dispose()
-        ocr.close()
-        engine.close()
-        projection?.stop()
+        runCatching { overlay.dispose() }
+        runCatching { ocr.close() }
+        runCatching { engine.close() }
+        runCatching { projection?.stop() }
         super.onDestroy()
     }
 
     companion object {
+        private const val TAG = "BubbleOverlay"
         const val ACTION_START = "com.emma019.ondevicebubble.action.START_OVERLAY"
         const val ACTION_STOP = "com.emma019.ondevicebubble.action.STOP_OVERLAY"
         const val EXTRA_RESULT_CODE = "result_code"
@@ -184,7 +229,9 @@ class BubbleOverlayService : Service() {
         private const val NOTIFICATION_ID = 42
 
         fun stop(context: Context) {
-            context.startService(Intent(context, BubbleOverlayService::class.java).setAction(ACTION_STOP))
+            context.startService(
+                Intent(context, BubbleOverlayService::class.java).setAction(ACTION_STOP),
+            )
         }
     }
 }
