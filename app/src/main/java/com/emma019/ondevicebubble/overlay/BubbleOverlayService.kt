@@ -29,6 +29,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.TimeoutCancellationException
 
 class BubbleOverlayService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -87,11 +88,7 @@ class BubbleOverlayService : Service() {
                     projection = mp
                     captor = ScreenCaptor(this, mp)
                     engine = MlKitTranslationEngine()
-                    overlay.showControls(
-                        onTranslate = { scope.launch { translateOnce() } },
-                        onClear = { overlay.clearTranslations() },
-                        onStop = { stopSelfSafely() },
-                    )
+                    showControlPanel()
                     toast("Ready: tap 訳")
                 } catch (t: Throwable) {
                     Log.e(TAG, "Failed to start projection", t)
@@ -101,6 +98,14 @@ class BubbleOverlayService : Service() {
             }
         }
         return START_STICKY
+    }
+
+    private fun showControlPanel() {
+        overlay.showControls(
+            onTranslate = { scope.launch { translateOnce() } },
+            onClear = { overlay.clearTranslations() },
+            onStop = { stopSelfSafely() },
+        )
     }
 
     private suspend fun translateOnce() {
@@ -116,19 +121,26 @@ class BubbleOverlayService : Service() {
         busy = true
         try {
             toast("Capturing…")
-            // Hide our own controls so OCR does not read them.
             overlay.removeControls()
-            delay(120)
+            delay(150)
             val bitmap = capture.capture()
-            toast("OCR…")
-            val blocks = withContext(Dispatchers.Default) { ocr.recognize(bitmap) }
-            bitmap.recycle()
+            toast("OCR… (${bitmap.width}x${bitmap.height})")
+            val blocks = try {
+                withContext(Dispatchers.Default) { ocr.recognize(bitmap) }
+            } catch (t: TimeoutCancellationException) {
+                toast("OCR timed out — try again")
+                emptyList()
+            } finally {
+                bitmap.recycle()
+            }
             Log.i(TAG, "OCR blocks=${blocks.size}")
             if (blocks.isEmpty()) {
-                toast("No text found — try Entire screen + English page")
+                toast("No text found / OCR empty")
                 return
             }
-            val limited = blocks.take(24)
+            val limited = blocks
+                .sortedByDescending { it.text.length }
+                .take(16)
             toast("Translating ${limited.size} blocks…")
             withContext(Dispatchers.Default) { engine.prepare {} }
             val translated = withContext(Dispatchers.Default) {
@@ -136,7 +148,7 @@ class BubbleOverlayService : Service() {
                     val out = runCatching {
                         engine.translate(block.text, "en", "ja")
                     }.getOrElse { err ->
-                        Log.e(TAG, "translate failed for: ${block.text.take(40)}", err)
+                        Log.e(TAG, "translate failed", err)
                         block.text
                     }
                     TranslatedBlock(original = block, translated = out)
@@ -148,11 +160,7 @@ class BubbleOverlayService : Service() {
             Log.e(TAG, "translateOnce failed", t)
             toast(t.message ?: t.toString())
         } finally {
-            overlay.showControls(
-                onTranslate = { scope.launch { translateOnce() } },
-                onClear = { overlay.clearTranslations() },
-                onStop = { stopSelfSafely() },
-            )
+            showControlPanel()
             busy = false
         }
     }
