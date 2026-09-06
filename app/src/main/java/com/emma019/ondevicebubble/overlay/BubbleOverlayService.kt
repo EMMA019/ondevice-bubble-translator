@@ -1,6 +1,5 @@
 package com.emma019.ondevicebubble.overlay
 
-import android.app.Activity
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -9,37 +8,34 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.media.projection.MediaProjection
-import android.media.projection.MediaProjectionManager
 import android.os.Build
-import android.os.Handler
 import android.os.IBinder
-import android.os.Looper
 import android.util.Log
 import android.widget.Toast
 import androidx.core.app.NotificationCompat
 import com.emma019.ondevicebubble.MainActivity
 import com.emma019.ondevicebubble.R
+import com.emma019.ondevicebubble.accessibility.TranslateAccessibilityService
+import com.emma019.ondevicebubble.translate.LanguageDetector
 import com.emma019.ondevicebubble.translate.MlKitTranslationEngine
-import com.emma019.ondevicebubble.translate.TranslationEngine
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.TimeoutCancellationException
 
+/**
+ * Fast path: Accessibility text → language id → ML Kit translate → bubbles.
+ * No screenshot/OCR on the primary path.
+ */
 class BubbleOverlayService : Service() {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private val mainHandler = Handler(Looper.getMainLooper())
     private lateinit var overlay: OverlayBubbleManager
-    private var projection: MediaProjection? = null
-    private var captor: ScreenCaptor? = null
-    private val ocr = ScreenOcr()
-    private var engine: TranslationEngine = MlKitTranslationEngine()
+    private val detector = LanguageDetector()
+    private val engine = MlKitTranslationEngine()
     private var busy = false
+    private val targetLang = "ja"
 
     override fun onBind(intent: Intent?): IBinder? = null
 
@@ -55,46 +51,13 @@ class BubbleOverlayService : Service() {
                 stopSelfSafely()
                 return START_NOT_STICKY
             }
-            ACTION_START -> {
-                val resultCode = intent.getIntExtra(EXTRA_RESULT_CODE, Activity.RESULT_CANCELED)
-                val data = if (Build.VERSION.SDK_INT >= 33) {
-                    intent.getParcelableExtra(EXTRA_RESULT_DATA, Intent::class.java)
-                } else {
-                    @Suppress("DEPRECATION")
-                    intent.getParcelableExtra(EXTRA_RESULT_DATA)
-                }
-                if (data == null) {
-                    toast("Missing capture permission data")
-                    stopSelfSafely()
-                    return START_NOT_STICKY
-                }
+            ACTION_START_A11Y, null -> {
                 startAsForeground()
-                val mpm = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
-                runCatching { projection?.stop() }
-                try {
-                    val mp = mpm.getMediaProjection(resultCode, data)
-                    mp.registerCallback(
-                        object : MediaProjection.Callback() {
-                            override fun onStop() {
-                                Log.w(TAG, "MediaProjection stopped")
-                                mainHandler.post {
-                                    toast("Screen capture ended — start overlay again")
-                                    stopSelfSafely()
-                                }
-                            }
-                        },
-                        mainHandler,
-                    )
-                    projection = mp
-                    captor = ScreenCaptor(this, mp)
-                    engine = MlKitTranslationEngine()
-                    showControlPanel()
-                    toast("Ready: tap 訳")
-                } catch (t: Throwable) {
-                    Log.e(TAG, "Failed to start projection", t)
-                    toast("Capture start failed: ${t.message}")
-                    stopSelfSafely()
+                if (!TranslateAccessibilityService.isEnabled()) {
+                    toast(getString(R.string.a11y_required))
                 }
+                showControlPanel()
+                toast("Ready: tap 訳 (text grab)")
             }
         }
         return START_STICKY
@@ -113,42 +76,49 @@ class BubbleOverlayService : Service() {
             toast("Already translating…")
             return
         }
-        val capture = captor
-        if (capture == null) {
-            toast("Capture not ready — restart overlay")
+        val a11y = TranslateAccessibilityService.instance
+        if (a11y == null) {
+            toast(getString(R.string.a11y_required))
             return
         }
         busy = true
         try {
-            toast("Capturing…")
-            overlay.removeControls()
-            delay(150)
-            val bitmap = capture.capture()
-            toast("OCR… (${bitmap.width}x${bitmap.height})")
-            val blocks = try {
-                withContext(Dispatchers.Default) { ocr.recognize(bitmap) }
-            } catch (t: TimeoutCancellationException) {
-                toast("OCR timed out — try again")
-                emptyList()
-            } finally {
-                bitmap.recycle()
-            }
-            Log.i(TAG, "OCR blocks=${blocks.size}")
+            toast("Grabbing text…")
+            val blocks = withContext(Dispatchers.Default) { a11y.snapshotTextBlocks() }
             if (blocks.isEmpty()) {
-                toast("No text found / OCR empty")
+                toast("No text nodes — enable Accessibility / open a text-heavy screen")
                 return
             }
             val limited = blocks
+                .filter { it.text.length >= 2 }
                 .sortedByDescending { it.text.length }
-                .take(16)
-            toast("Translating ${limited.size} blocks…")
-            withContext(Dispatchers.Default) { engine.prepare {} }
+                .take(40)
+            toast("Detecting languages (${limited.size})…")
+
+            val prepared = withContext(Dispatchers.Default) {
+                limited.mapNotNull { block ->
+                    val lang = runCatching { detector.detect(block.text) }.getOrDefault("und")
+                    if (lang == "ja" || lang == "und") {
+                        // Skip Japanese; keep und for a best-effort en translate below.
+                        if (lang == "ja") return@mapNotNull null
+                    }
+                    val source = if (lang == "und") "en" else lang
+                    if (engine.mapLang(source) == null) return@mapNotNull null
+                    block to source
+                }
+            }
+            if (prepared.isEmpty()) {
+                toast("Nothing to translate (already JA / unsupported)")
+                return
+            }
+
+            toast("Translating ${prepared.size}…")
             val translated = withContext(Dispatchers.Default) {
-                limited.map { block ->
+                prepared.map { (block, source) ->
                     val out = runCatching {
-                        engine.translate(block.text, "en", "ja")
+                        engine.translate(block.text, source, targetLang)
                     }.getOrElse { err ->
-                        Log.e(TAG, "translate failed", err)
+                        Log.e(TAG, "translate failed ($source)", err)
                         block.text
                     }
                     TranslatedBlock(original = block, translated = out)
@@ -160,7 +130,6 @@ class BubbleOverlayService : Service() {
             Log.e(TAG, "translateOnce failed", t)
             toast(t.message ?: t.toString())
         } finally {
-            showControlPanel()
             busy = false
         }
     }
@@ -178,18 +147,20 @@ class BubbleOverlayService : Service() {
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.overlay_notification_title))
-            .setContentText(getString(R.string.overlay_notification_text))
+            .setContentText(getString(R.string.overlay_notification_text_a11y))
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentIntent(open)
             .setOngoing(true)
             .build()
 
-        if (Build.VERSION.SDK_INT >= 29) {
+        if (Build.VERSION.SDK_INT >= 34) {
             startForeground(
                 NOTIFICATION_ID,
                 notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
             )
+        } else if (Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIFICATION_ID, notification, 0)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
@@ -209,11 +180,8 @@ class BubbleOverlayService : Service() {
 
     private fun stopSelfSafely() {
         runCatching { overlay.dispose() }
-        runCatching { ocr.close() }
+        runCatching { detector.close() }
         runCatching { engine.close() }
-        runCatching { projection?.stop() }
-        projection = null
-        captor = null
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -221,20 +189,22 @@ class BubbleOverlayService : Service() {
     override fun onDestroy() {
         scope.cancel()
         runCatching { overlay.dispose() }
-        runCatching { ocr.close() }
+        runCatching { detector.close() }
         runCatching { engine.close() }
-        runCatching { projection?.stop() }
         super.onDestroy()
     }
 
     companion object {
         private const val TAG = "BubbleOverlay"
-        const val ACTION_START = "com.emma019.ondevicebubble.action.START_OVERLAY"
+        const val ACTION_START_A11Y = "com.emma019.ondevicebubble.action.START_A11Y"
         const val ACTION_STOP = "com.emma019.ondevicebubble.action.STOP_OVERLAY"
-        const val EXTRA_RESULT_CODE = "result_code"
-        const val EXTRA_RESULT_DATA = "result_data"
         private const val CHANNEL_ID = "bubble_overlay"
         private const val NOTIFICATION_ID = 42
+
+        fun startA11y(context: Context) {
+            val intent = Intent(context, BubbleOverlayService::class.java).setAction(ACTION_START_A11Y)
+            context.startForegroundService(intent)
+        }
 
         fun stop(context: Context) {
             context.startService(

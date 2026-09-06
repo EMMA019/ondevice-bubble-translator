@@ -11,10 +11,11 @@ import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.lifecycle.lifecycleScope
+import com.emma019.ondevicebubble.accessibility.TranslateAccessibilityService
 import com.emma019.ondevicebubble.databinding.ActivityMainBinding
 import com.emma019.ondevicebubble.overlay.BubbleOverlayService
-import com.emma019.ondevicebubble.overlay.ProjectionPermissionActivity
 import com.emma019.ondevicebubble.translate.EngineRegistry
+import com.emma019.ondevicebubble.translate.LanguageDetector
 import com.emma019.ondevicebubble.translate.TextPreprocessor
 import com.emma019.ondevicebubble.translate.TranslationEngine
 import kotlinx.coroutines.Dispatchers
@@ -28,7 +29,7 @@ class MainActivity : AppCompatActivity() {
 
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { /* optional */ }
+    ) { }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -59,7 +60,7 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         if (pendingOverlayStart && Settings.canDrawOverlays(this)) {
             pendingOverlayStart = false
-            startActivity(ProjectionPermissionActivity.intent(this))
+            continueOverlayStart()
         }
     }
 
@@ -75,7 +76,17 @@ class MainActivity : AppCompatActivity() {
             )
             return
         }
-        startActivity(ProjectionPermissionActivity.intent(this))
+        continueOverlayStart()
+    }
+
+    private fun continueOverlayStart() {
+        if (!TranslateAccessibilityService.isEnabled()) {
+            Toast.makeText(this, R.string.a11y_required, Toast.LENGTH_LONG).show()
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            return
+        }
+        BubbleOverlayService.startA11y(this)
+        Toast.makeText(this, R.string.overlay_started_a11y, Toast.LENGTH_SHORT).show()
     }
 
     private fun runTranslate() {
@@ -87,6 +98,7 @@ class MainActivity : AppCompatActivity() {
 
         val engine = engines[binding.engineSpinner.selectedItemPosition]
         val cleaned = TextPreprocessor.normalize(raw)
+        val detector = LanguageDetector()
 
         binding.translateButton.isEnabled = false
         binding.statusText.setText(R.string.status_translating)
@@ -96,12 +108,14 @@ class MainActivity : AppCompatActivity() {
             val started = System.currentTimeMillis()
             try {
                 val result = withContext(Dispatchers.Default) {
+                    val lang = runCatching { detector.detect(cleaned) }.getOrDefault("en")
+                    val source = if (lang == "und" || lang == "ja") "en" else lang
                     engine.prepare { msg ->
                         lifecycleScope.launch(Dispatchers.Main) {
                             binding.statusText.text = msg
                         }
                     }
-                    engine.translate(cleaned, "en", "ja")
+                    engine.translate(cleaned, source, "ja")
                 }
                 val ms = System.currentTimeMillis() - started
                 binding.outputText.setText(result)
@@ -111,6 +125,7 @@ class MainActivity : AppCompatActivity() {
                 binding.statusText.text = message
                 Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
             } finally {
+                detector.close()
                 binding.translateButton.isEnabled = true
             }
         }
