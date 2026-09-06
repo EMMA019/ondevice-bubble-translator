@@ -1,24 +1,34 @@
 package com.emma019.ondevicebubble.accessibility
 
 import android.accessibilityservice.AccessibilityService
+import android.graphics.Bitmap
 import android.graphics.Rect
+import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.emma019.ondevicebubble.overlay.TextBlock
 import com.emma019.ondevicebubble.translate.TextPreprocessor
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.coroutines.resume
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 /**
- * Primary text source for fast translation: read visible nodes from the
- * active window (no screenshot / OCR). Also notifies listeners when the
- * screen likely changed (debounced) for always-on translation.
+ * Primary text source: accessibility nodes.
+ * Fallback for Chrome/Web: takeScreenshot() → OCR (no MediaProjection).
  */
 class TranslateAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val notifyRunnable = Runnable {
         screenChangeListener?.onScreenMaybeChanged()
     }
+    private val screenshotExecutor = Executors.newSingleThreadExecutor()
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
@@ -44,14 +54,43 @@ class TranslateAccessibilityService : AccessibilityService() {
         walk(root, out)
         return out.values
             .filter { it.text.length >= 2 }
+            .filterNot { isChromeChromeUi(it.text) }
             .sortedBy { it.top * 10000 + it.left }
     }
 
-    fun contentFingerprint(): String {
-        return snapshotTextBlocks()
-            .joinToString("\n") { it.text }
-            .hashCode()
-            .toString()
+    /**
+     * Screenshot via AccessibilityService (API 30+). Used when node text is too thin
+     * (typical for Chrome article bodies).
+     */
+    suspend fun takeBitmapScreenshot(): Bitmap? {
+        if (Build.VERSION.SDK_INT < 30) return null
+        return suspendCancellableCoroutine { cont ->
+            val held = AtomicReference<Bitmap?>()
+            takeScreenshot(
+                Display.DEFAULT_DISPLAY,
+                screenshotExecutor,
+                object : TakeScreenshotCallback {
+                    override fun onSuccess(screenshot: ScreenshotResult) {
+                        try {
+                            val hw = screenshot.hardwareBuffer
+                            val bmp = Bitmap.wrapHardwareBuffer(hw, screenshot.colorSpace)
+                                ?.copy(Bitmap.Config.ARGB_8888, false)
+                            hw.close()
+                            held.set(bmp)
+                            if (cont.isActive) cont.resume(bmp)
+                        } catch (t: Throwable) {
+                            Log.e(TAG, "screenshot convert failed", t)
+                            if (cont.isActive) cont.resume(null)
+                        }
+                    }
+
+                    override fun onFailure(errorCode: Int) {
+                        Log.e(TAG, "takeScreenshot failed code=$errorCode")
+                        if (cont.isActive) cont.resume(null)
+                    }
+                },
+            )
+        }
     }
 
     private fun walk(node: AccessibilityNodeInfo, out: LinkedHashMap<String, TextBlock>) {
@@ -74,7 +113,6 @@ class TranslateAccessibilityService : AccessibilityService() {
         for (i in 0 until node.childCount) {
             node.getChild(i)?.let { child ->
                 walk(child, out)
-                child.recycle()
             }
         }
     }
@@ -84,7 +122,27 @@ class TranslateAccessibilityService : AccessibilityService() {
     }
 
     companion object {
+        private const val TAG = "TranslateA11y"
         private const val DEBOUNCE_MS = 700L
+
+        private val chromeUi = setOf(
+            "share", "save", "search", "menu", "home", "sign in", "subscribe",
+            "add as preferred on google", "listen", "follow", "bbc",
+        )
+
+        fun isChromeChromeUi(text: String): Boolean {
+            val t = text.trim().lowercase()
+            if (t.length <= 24 && chromeUi.any { t == it || t.startsWith(it) }) return true
+            return false
+        }
+
+        /** True when node text is too thin to trust (e.g. Chrome article). */
+        fun needsOcrFallback(blocks: List<TextBlock>): Boolean {
+            if (blocks.isEmpty()) return true
+            val substantial = blocks.count { it.text.length >= 40 }
+            val totalChars = blocks.sumOf { it.text.length }
+            return substantial < 2 || totalChars < 120
+        }
 
         @Volatile
         var instance: TranslateAccessibilityService? = null
