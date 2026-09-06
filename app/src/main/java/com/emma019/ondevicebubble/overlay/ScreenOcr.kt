@@ -17,7 +17,7 @@ class ScreenOcr {
     suspend fun recognize(bitmap: Bitmap): List<TextBlock> {
         val scaled = scaleForOcr(bitmap)
         return try {
-            withTimeout(20_000) {
+            withTimeout(15_000) {
                 recognizeInternal(scaled)
             }
         } finally {
@@ -33,8 +33,7 @@ class ScreenOcr {
                     val blocks = result.textBlocks.mapNotNull { block ->
                         val box = block.boundingBox ?: return@mapNotNull null
                         val cleaned = TextPreprocessor.normalize(block.text)
-                        if (cleaned.length < 2) return@mapNotNull null
-                        // Map boxes back to original full-screen coordinates.
+                        if (cleaned.length < 3) return@mapNotNull null
                         TextBlock(
                             text = cleaned,
                             left = (box.left / lastScale).toInt(),
@@ -55,7 +54,7 @@ class ScreenOcr {
     private var lastScale = 1f
 
     private fun scaleForOcr(bitmap: Bitmap): Bitmap {
-        val maxW = 1080
+        val maxW = 900
         if (bitmap.width <= maxW) {
             lastScale = 1f
             return bitmap

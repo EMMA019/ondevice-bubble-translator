@@ -22,19 +22,22 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.TimeoutCancellationException
 
 /**
- * Auto → ML Kit (fast).
- * Manual 訳 → ML Kit + Local LLM on long blocks when model present.
- * 磨 → re-polish current bubbles with Local LLM.
+ * Auto → ML Kit.
+ * Text source: Accessibility nodes, with Accessibility screenshot+OCR fallback
+ * when the tree is thin (Chrome articles, etc.).
  */
 class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChangeListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var overlay: OverlayBubbleManager
     private val detector = LanguageDetector()
     private lateinit var hybrid: HybridTranslator
+    private val ocr = ScreenOcr()
     private var busy = false
     private var autoEnabled = true
     private var lastFingerprint: String? = null
@@ -107,6 +110,46 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
         )
     }
 
+    private suspend fun collectBlocks(
+        a11y: TranslateAccessibilityService,
+        silent: Boolean,
+    ): List<TextBlock> {
+        val nodeBlocks = withContext(Dispatchers.Default) { a11y.snapshotTextBlocks() }
+        if (!TranslateAccessibilityService.needsOcrFallback(nodeBlocks)) {
+            return nodeBlocks
+        }
+        if (!silent) toast("Chrome-like page — OCR fallback…")
+        // Hide our panel so OCR does not read it.
+        overlay.removeControls()
+        overlay.clearTranslations()
+        delay(180)
+        val bitmap = try {
+            a11y.takeBitmapScreenshot()
+        } catch (t: Throwable) {
+            Log.e(TAG, "a11y screenshot failed", t)
+            null
+        }
+        showControlPanel()
+        if (bitmap == null) {
+            if (!silent) toast("Screenshot failed — using sparse a11y text")
+            return nodeBlocks
+        }
+        return try {
+            val ocrBlocks = withContext(Dispatchers.Default) { ocr.recognize(bitmap) }
+            if (!silent) toast("OCR blocks: ${ocrBlocks.size}")
+            if (ocrBlocks.size >= nodeBlocks.size) ocrBlocks else nodeBlocks
+        } catch (t: TimeoutCancellationException) {
+            if (!silent) toast("OCR timed out")
+            nodeBlocks
+        } catch (t: Throwable) {
+            Log.e(TAG, "OCR failed", t)
+            if (!silent) toast("OCR error: ${t.message}")
+            nodeBlocks
+        } finally {
+            bitmap.recycle()
+        }
+    }
+
     private suspend fun translateOnce(silent: Boolean, preferQuality: Boolean) {
         if (busy) return
         val a11y = TranslateAccessibilityService.instance
@@ -117,12 +160,12 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
         busy = true
         try {
             if (!silent) toast("Grabbing text…")
-            val blocks = withContext(Dispatchers.Default) { a11y.snapshotTextBlocks() }
+            val blocks = collectBlocks(a11y, silent)
             val fingerprint = blocks.joinToString("\n") { it.text }.hashCode().toString() +
                 if (preferQuality) ":q" else ":f"
             if (silent && fingerprint == lastFingerprint) return
             if (blocks.isEmpty()) {
-                if (!silent) toast("No text nodes")
+                if (!silent) toast("No text found")
                 overlay.clearTranslations()
                 lastFingerprint = fingerprint
                 lastBlocks = emptyList()
@@ -131,7 +174,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
             val limited = blocks
                 .filter { it.text.length >= 2 }
                 .sortedByDescending { it.text.length }
-                .take(if (preferQuality) 24 else 40)
+                .take(if (preferQuality) 20 else 30)
 
             val prepared = withContext(Dispatchers.Default) {
                 limited.mapNotNull { block ->
@@ -177,6 +220,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
         } catch (t: Throwable) {
             Log.e(TAG, "translateOnce failed", t)
             if (!silent) toast(t.message ?: t.toString())
+            showControlPanel()
         } finally {
             busy = false
         }
@@ -196,9 +240,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
         try {
             toast(getString(R.string.overlay_polishing))
             val ok = withContext(Dispatchers.Default) {
-                hybrid.ensureLlm { msg ->
-                    scope.launch { toast(msg) }
-                }
+                hybrid.ensureLlm { msg -> scope.launch { toast(msg) } }
             }
             if (!ok) {
                 toast("Local LLM failed to load")
@@ -220,7 +262,6 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
                         block
                     }
             }
-            // Keep full list order; polished items already mutated.
             overlay.showTranslations(lastBlocks)
             toast("Polished ${polished.size} with Local LLM")
         } catch (t: Throwable) {
@@ -278,6 +319,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
         runCatching { overlay.dispose() }
         runCatching { detector.close() }
         runCatching { hybrid.close() }
+        runCatching { ocr.close() }
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
@@ -288,6 +330,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
         runCatching { overlay.dispose() }
         runCatching { detector.close() }
         runCatching { hybrid.close() }
+        runCatching { ocr.close() }
         super.onDestroy()
     }
 
