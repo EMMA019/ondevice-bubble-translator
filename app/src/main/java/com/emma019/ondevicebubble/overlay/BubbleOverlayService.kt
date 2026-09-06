@@ -18,7 +18,6 @@ import com.emma019.ondevicebubble.R
 import com.emma019.ondevicebubble.accessibility.TranslateAccessibilityService
 import com.emma019.ondevicebubble.translate.HybridTranslator
 import com.emma019.ondevicebubble.translate.LanguageDetector
-import com.emma019.ondevicebubble.translate.ProperNounGuard
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -32,6 +31,7 @@ import kotlinx.coroutines.TimeoutCancellationException
  * Auto → ML Kit.
  * Text source: Accessibility nodes, with Accessibility screenshot+OCR fallback
  * when the tree is thin (Chrome articles, etc.).
+ * Secondary mode — primary UX is the WebView reader.
  */
 class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChangeListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
@@ -120,7 +120,6 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
             return TextBlockMerger.merge(nodeBlocks)
         }
         if (!silent) toast("Chrome-like page — OCR fallback…")
-        // Hide our panel so OCR does not read it.
         overlay.removeControls()
         overlay.clearTranslations()
         delay(180)
@@ -201,10 +200,9 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
             }
             val translated = withContext(Dispatchers.Default) {
                 prepared.map { (block, source) ->
-                    val protected = ProperNounGuard.protect(block.text)
-                    val outRaw = runCatching {
+                    val out = runCatching {
                         hybrid.translateBlock(
-                            text = protected.masked,
+                            text = block.text,
                             sourceLang = source,
                             targetLang = targetLang,
                             preferQuality = preferQuality,
@@ -213,7 +211,6 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
                         Log.e(TAG, "translate failed ($source)", err)
                         block.text
                     }
-                    val out = ProperNounGuard.restore(outRaw, protected.tokens)
                     TranslatedBlock(original = block, translated = out, sourceLang = source)
                 }
             }
@@ -255,15 +252,14 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
                     .sortedByDescending { it.original.text.length }
                     .take(12)
                     .map { block ->
-                        val protected = ProperNounGuard.protect(block.original.text)
                         val out = runCatching {
                             hybrid.translateQuality(
-                                protected.masked,
+                                block.original.text,
                                 block.sourceLang,
                                 targetLang,
                             )
                         }.getOrElse { block.translated }
-                        block.translated = ProperNounGuard.restore(out, protected.tokens)
+                        block.translated = out
                         block
                     }
             }
