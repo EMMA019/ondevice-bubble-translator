@@ -34,12 +34,13 @@ class OverlayBubbleManager(private val context: Context) {
         autoEnabled: Boolean,
         onToggleAuto: () -> Unit,
         onTranslate: () -> Unit,
+        onPolish: () -> Unit,
         onClear: () -> Unit,
         onStop: () -> Unit,
     ) {
         removeControls()
         val density = context.resources.displayMetrics.density
-        val pad = (12 * density).toInt()
+        val pad = (10 * density).toInt()
 
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -52,7 +53,7 @@ class OverlayBubbleManager(private val context: Context) {
             TextView(context).apply {
                 text = label
                 setTextColor(Color.WHITE)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 15f)
                 setPadding(pad, pad, pad, pad)
                 gravity = Gravity.CENTER
                 setOnClickListener { click() }
@@ -60,6 +61,7 @@ class OverlayBubbleManager(private val context: Context) {
 
         autoChip = chip(autoLabel(autoEnabled), onToggleAuto).also { row.addView(it) }
         row.addView(chip(context.getString(com.emma019.ondevicebubble.R.string.overlay_bubble_label), onTranslate))
+        row.addView(chip(context.getString(com.emma019.ondevicebubble.R.string.overlay_polish_label), onPolish))
         row.addView(chip(context.getString(com.emma019.ondevicebubble.R.string.overlay_clear_label), onClear))
         row.addView(chip("×", onStop))
 
@@ -73,7 +75,7 @@ class OverlayBubbleManager(private val context: Context) {
         ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = (context.resources.displayMetrics.widthPixels - (72 * density).toInt())
-            y = (160 * density).toInt()
+            y = (140 * density).toInt()
         }
 
         enableDrag(row, params)

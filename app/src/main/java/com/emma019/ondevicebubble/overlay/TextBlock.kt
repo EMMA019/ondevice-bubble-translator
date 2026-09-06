@@ -13,6 +13,7 @@ data class TextBlock(
 
 data class TranslatedBlock(
     val original: TextBlock,
-    val translated: String,
+    var translated: String,
+    var sourceLang: String = "en",
     var showingTranslation: Boolean = true,
 )
