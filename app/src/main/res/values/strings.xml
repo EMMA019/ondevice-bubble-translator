@@ -17,11 +17,15 @@
     <string name="overlay_notification_title">Bubble translator running</string>
     <string name="overlay_notification_text">Tap 訳 to grab on-screen text</string>
     <string name="overlay_notification_text_a11y">Accessibility text grab → translate to Japanese</string>
+    <string name="overlay_notification_text_auto">Auto-translate on screen changes</string>
     <string name="overlay_need_permission">Allow display over other apps, then try again.</string>
     <string name="overlay_bubble_label">訳</string>
     <string name="overlay_clear_label">消</string>
-    <string name="overlay_started_a11y">Overlay started — tap 訳</string>
+    <string name="overlay_auto_on">自動ON</string>
+    <string name="overlay_auto_off">自動OFF</string>
+    <string name="overlay_auto_ready">Auto ON — translations update as the screen settles</string>
+    <string name="overlay_started_a11y">Overlay started — auto translate enabled</string>
     <string name="a11y_required">Turn on OnDevice Translate Lab in Accessibility settings</string>
-    <string name="a11y_service_description">Reads on-screen text so the bubble translator can translate without screenshots. Used only while enabled.</string>
-    <string name="phase2_hint">Fast path: enable Accessibility + overlay, then tap 訳. Auto-detects language → Japanese.</string>
+    <string name="a11y_service_description">Reads on-screen text so the bubble translator can auto-translate without screenshots. Used only while enabled.</string>
+    <string name="phase2_hint">Differentiator: default is translated. Auto ON updates bubbles when the screen settles. Tap bubble for original.</string>
 </resources>

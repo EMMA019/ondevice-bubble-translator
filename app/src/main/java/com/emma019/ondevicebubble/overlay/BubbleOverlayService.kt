@@ -26,15 +26,17 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Fast path: Accessibility text → language id → ML Kit translate → bubbles.
- * No screenshot/OCR on the primary path.
+ * Always-on path: Accessibility screen-change → debounce → language id →
+ * translate to Japanese → bubbles. Manual 訳 still works. Auto is ON by default.
  */
-class BubbleOverlayService : Service() {
+class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChangeListener {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private lateinit var overlay: OverlayBubbleManager
     private val detector = LanguageDetector()
     private val engine = MlKitTranslationEngine()
     private var busy = false
+    private var autoEnabled = true
+    private var lastFingerprint: String? = null
     private val targetLang = "ja"
 
     override fun onBind(intent: Intent?): IBinder? = null
@@ -56,44 +58,67 @@ class BubbleOverlayService : Service() {
                 if (!TranslateAccessibilityService.isEnabled()) {
                     toast(getString(R.string.a11y_required))
                 }
+                TranslateAccessibilityService.screenChangeListener = this
                 showControlPanel()
-                toast("Ready: tap 訳 (text grab)")
+                toast(getString(R.string.overlay_auto_ready))
+                // First paint for current screen.
+                scope.launch { translateOnce(silent = true) }
             }
         }
         return START_STICKY
     }
 
+    override fun onScreenMaybeChanged() {
+        if (!autoEnabled) return
+        scope.launch { translateOnce(silent = true) }
+    }
+
     private fun showControlPanel() {
         overlay.showControls(
-            onTranslate = { scope.launch { translateOnce() } },
-            onClear = { overlay.clearTranslations() },
+            autoEnabled = autoEnabled,
+            onToggleAuto = {
+                autoEnabled = !autoEnabled
+                overlay.updateAutoLabel(autoEnabled)
+                toast(
+                    if (autoEnabled) getString(R.string.overlay_auto_on)
+                    else getString(R.string.overlay_auto_off),
+                )
+                if (autoEnabled) {
+                    scope.launch { translateOnce(silent = true) }
+                }
+            },
+            onTranslate = { scope.launch { translateOnce(silent = false) } },
+            onClear = {
+                overlay.clearTranslations()
+                lastFingerprint = null
+            },
             onStop = { stopSelfSafely() },
         )
     }
 
-    private suspend fun translateOnce() {
-        if (busy) {
-            toast("Already translating…")
-            return
-        }
+    private suspend fun translateOnce(silent: Boolean) {
+        if (busy) return
         val a11y = TranslateAccessibilityService.instance
         if (a11y == null) {
-            toast(getString(R.string.a11y_required))
+            if (!silent) toast(getString(R.string.a11y_required))
             return
         }
         busy = true
         try {
-            toast("Grabbing text…")
+            if (!silent) toast("Grabbing text…")
             val blocks = withContext(Dispatchers.Default) { a11y.snapshotTextBlocks() }
+            val fingerprint = blocks.joinToString("\n") { it.text }.hashCode().toString()
+            if (fingerprint == lastFingerprint) return
             if (blocks.isEmpty()) {
-                toast("No text nodes — enable Accessibility / open a text-heavy screen")
+                if (!silent) toast("No text nodes")
+                overlay.clearTranslations()
+                lastFingerprint = fingerprint
                 return
             }
             val limited = blocks
                 .filter { it.text.length >= 2 }
                 .sortedByDescending { it.text.length }
                 .take(40)
-            toast("Detecting languages (${limited.size})…")
 
             val prepared = withContext(Dispatchers.Default) {
                 limited.mapNotNull { block ->
@@ -105,11 +130,13 @@ class BubbleOverlayService : Service() {
                 }
             }
             if (prepared.isEmpty()) {
-                toast("Nothing to translate (already JA / unsupported)")
+                overlay.clearTranslations()
+                lastFingerprint = fingerprint
+                if (!silent) toast("Nothing to translate")
                 return
             }
 
-            toast("Translating ${prepared.size}…")
+            if (!silent) toast("Translating ${prepared.size}…")
             val translated = withContext(Dispatchers.Default) {
                 prepared.map { (block, source) ->
                     val out = runCatching {
@@ -122,10 +149,11 @@ class BubbleOverlayService : Service() {
                 }
             }
             overlay.showTranslations(translated)
-            toast("Done: ${translated.size} bubbles")
+            lastFingerprint = fingerprint
+            if (!silent) toast("Done: ${translated.size}")
         } catch (t: Throwable) {
             Log.e(TAG, "translateOnce failed", t)
-            toast(t.message ?: t.toString())
+            if (!silent) toast(t.message ?: t.toString())
         } finally {
             busy = false
         }
@@ -144,7 +172,7 @@ class BubbleOverlayService : Service() {
         )
         val notification: Notification = NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(getString(R.string.overlay_notification_title))
-            .setContentText(getString(R.string.overlay_notification_text_a11y))
+            .setContentText(getString(R.string.overlay_notification_text_auto))
             .setSmallIcon(R.drawable.ic_launcher)
             .setContentIntent(open)
             .setOngoing(true)
@@ -174,6 +202,7 @@ class BubbleOverlayService : Service() {
     }
 
     private fun stopSelfSafely() {
+        TranslateAccessibilityService.screenChangeListener = null
         runCatching { overlay.dispose() }
         runCatching { detector.close() }
         runCatching { engine.close() }
@@ -182,6 +211,7 @@ class BubbleOverlayService : Service() {
     }
 
     override fun onDestroy() {
+        TranslateAccessibilityService.screenChangeListener = null
         scope.cancel()
         runCatching { overlay.dispose() }
         runCatching { detector.close() }
