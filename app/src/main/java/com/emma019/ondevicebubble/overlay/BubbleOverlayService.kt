@@ -18,6 +18,7 @@ import com.emma019.ondevicebubble.R
 import com.emma019.ondevicebubble.accessibility.TranslateAccessibilityService
 import com.emma019.ondevicebubble.translate.HybridTranslator
 import com.emma019.ondevicebubble.translate.LanguageDetector
+import com.emma019.ondevicebubble.translate.ProperNounGuard
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -116,7 +117,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
     ): List<TextBlock> {
         val nodeBlocks = withContext(Dispatchers.Default) { a11y.snapshotTextBlocks() }
         if (!TranslateAccessibilityService.needsOcrFallback(nodeBlocks)) {
-            return nodeBlocks
+            return TextBlockMerger.merge(nodeBlocks)
         }
         if (!silent) toast("Chrome-like page — OCR fallback…")
         // Hide our panel so OCR does not read it.
@@ -132,19 +133,20 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
         showControlPanel()
         if (bitmap == null) {
             if (!silent) toast("Screenshot failed — using sparse a11y text")
-            return nodeBlocks
+            return TextBlockMerger.merge(nodeBlocks)
         }
         return try {
             val ocrBlocks = withContext(Dispatchers.Default) { ocr.recognize(bitmap) }
             if (!silent) toast("OCR blocks: ${ocrBlocks.size}")
-            if (ocrBlocks.size >= nodeBlocks.size) ocrBlocks else nodeBlocks
+            val chosen = if (ocrBlocks.size >= nodeBlocks.size) ocrBlocks else nodeBlocks
+            TextBlockMerger.merge(chosen)
         } catch (t: TimeoutCancellationException) {
             if (!silent) toast("OCR timed out")
-            nodeBlocks
+            TextBlockMerger.merge(nodeBlocks)
         } catch (t: Throwable) {
             Log.e(TAG, "OCR failed", t)
             if (!silent) toast("OCR error: ${t.message}")
-            nodeBlocks
+            TextBlockMerger.merge(nodeBlocks)
         } finally {
             bitmap.recycle()
         }
@@ -174,7 +176,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
             val limited = blocks
                 .filter { it.text.length >= 2 }
                 .sortedByDescending { it.text.length }
-                .take(if (preferQuality) 20 else 30)
+                .take(if (preferQuality) 16 else 24)
 
             val prepared = withContext(Dispatchers.Default) {
                 limited.mapNotNull { block ->
@@ -199,9 +201,10 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
             }
             val translated = withContext(Dispatchers.Default) {
                 prepared.map { (block, source) ->
-                    val out = runCatching {
+                    val protected = ProperNounGuard.protect(block.text)
+                    val outRaw = runCatching {
                         hybrid.translateBlock(
-                            text = block.text,
+                            text = protected.masked,
                             sourceLang = source,
                             targetLang = targetLang,
                             preferQuality = preferQuality,
@@ -210,6 +213,7 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
                         Log.e(TAG, "translate failed ($source)", err)
                         block.text
                     }
+                    val out = ProperNounGuard.restore(outRaw, protected.tokens)
                     TranslatedBlock(original = block, translated = out, sourceLang = source)
                 }
             }
@@ -251,14 +255,15 @@ class BubbleOverlayService : Service(), TranslateAccessibilityService.ScreenChan
                     .sortedByDescending { it.original.text.length }
                     .take(12)
                     .map { block ->
+                        val protected = ProperNounGuard.protect(block.original.text)
                         val out = runCatching {
                             hybrid.translateQuality(
-                                block.original.text,
+                                protected.masked,
                                 block.sourceLang,
                                 targetLang,
                             )
                         }.getOrElse { block.translated }
-                        block.translated = out
+                        block.translated = ProperNounGuard.restore(out, protected.tokens)
                         block
                     }
             }
