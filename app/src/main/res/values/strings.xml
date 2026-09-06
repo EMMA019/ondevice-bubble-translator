@@ -1,0 +1,15 @@
+<resources>
+    <string name="app_name">OnDevice Translate Lab</string>
+    <string name="hint_source">English source text</string>
+    <string name="hint_output">Translation appears here</string>
+    <string name="btn_translate">Translate</string>
+    <string name="engine_mlkit">ML Kit (baseline)</string>
+    <string name="engine_local_llm">Local LLM (MediaPipe)</string>
+    <string name="label_engine">Engine</string>
+    <string name="status_idle">Ready</string>
+    <string name="status_downloading">Downloading language pack…</string>
+    <string name="status_translating">Translating…</string>
+    <string name="status_done">Done (%1$d ms)</string>
+    <string name="error_empty">Enter some text first.</string>
+    <string name="error_no_model">Local LLM model not found. Place a MediaPipe .task file at files/models/gemma.task (see README).</string>
+</resources>
