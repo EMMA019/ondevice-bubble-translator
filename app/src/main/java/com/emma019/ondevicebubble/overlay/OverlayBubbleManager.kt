@@ -20,6 +20,7 @@ class OverlayBubbleManager(private val context: Context) {
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
     private val bubbleViews = mutableListOf<View>()
     private var controlView: View? = null
+    private var autoChip: TextView? = null
 
     private val overlayType: Int
         get() = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
@@ -30,13 +31,15 @@ class OverlayBubbleManager(private val context: Context) {
         }
 
     fun showControls(
+        autoEnabled: Boolean,
+        onToggleAuto: () -> Unit,
         onTranslate: () -> Unit,
         onClear: () -> Unit,
         onStop: () -> Unit,
     ) {
         removeControls()
         val density = context.resources.displayMetrics.density
-        val pad = (14 * density).toInt()
+        val pad = (12 * density).toInt()
 
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
@@ -49,12 +52,13 @@ class OverlayBubbleManager(private val context: Context) {
             TextView(context).apply {
                 text = label
                 setTextColor(Color.WHITE)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
                 setPadding(pad, pad, pad, pad)
                 gravity = Gravity.CENTER
                 setOnClickListener { click() }
             }
 
+        autoChip = chip(autoLabel(autoEnabled), onToggleAuto).also { row.addView(it) }
         row.addView(chip(context.getString(com.emma019.ondevicebubble.R.string.overlay_bubble_label), onTranslate))
         row.addView(chip(context.getString(com.emma019.ondevicebubble.R.string.overlay_clear_label), onClear))
         row.addView(chip("×", onStop))
@@ -76,6 +80,14 @@ class OverlayBubbleManager(private val context: Context) {
         windowManager.addView(row, params)
         controlView = row
     }
+
+    fun updateAutoLabel(autoEnabled: Boolean) {
+        autoChip?.text = autoLabel(autoEnabled)
+    }
+
+    private fun autoLabel(on: Boolean): String =
+        if (on) context.getString(com.emma019.ondevicebubble.R.string.overlay_auto_on)
+        else context.getString(com.emma019.ondevicebubble.R.string.overlay_auto_off)
 
     fun showTranslations(blocks: List<TranslatedBlock>) {
         clearTranslations()
@@ -131,6 +143,7 @@ class OverlayBubbleManager(private val context: Context) {
     fun removeControls() {
         controlView?.let { runCatching { windowManager.removeView(it) } }
         controlView = null
+        autoChip = null
     }
 
     fun dispose() {

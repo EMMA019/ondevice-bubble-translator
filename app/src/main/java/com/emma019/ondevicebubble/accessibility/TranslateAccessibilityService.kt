@@ -2,6 +2,8 @@ package com.emma019.ondevicebubble.accessibility
 
 import android.accessibilityservice.AccessibilityService
 import android.graphics.Rect
+import android.os.Handler
+import android.os.Looper
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.emma019.ondevicebubble.overlay.TextBlock
@@ -9,11 +11,32 @@ import com.emma019.ondevicebubble.translate.TextPreprocessor
 
 /**
  * Primary text source for fast translation: read visible nodes from the
- * active window (no screenshot / OCR).
+ * active window (no screenshot / OCR). Also notifies listeners when the
+ * screen likely changed (debounced) for always-on translation.
  */
 class TranslateAccessibilityService : AccessibilityService() {
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val notifyRunnable = Runnable {
+        screenChangeListener?.onScreenMaybeChanged()
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED,
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+            AccessibilityEvent.TYPE_VIEW_SCROLLED,
+            -> scheduleNotify()
+        }
+    }
+
     override fun onInterrupt() = Unit
+
+    private fun scheduleNotify() {
+        if (screenChangeListener == null) return
+        mainHandler.removeCallbacks(notifyRunnable)
+        mainHandler.postDelayed(notifyRunnable, DEBOUNCE_MS)
+    }
 
     fun snapshotTextBlocks(): List<TextBlock> {
         val root = rootInActiveWindow ?: return emptyList()
@@ -24,10 +47,14 @@ class TranslateAccessibilityService : AccessibilityService() {
             .sortedBy { it.top * 10000 + it.left }
     }
 
+    fun contentFingerprint(): String {
+        return snapshotTextBlocks()
+            .joinToString("\n") { it.text }
+            .hashCode()
+            .toString()
+    }
+
     private fun walk(node: AccessibilityNodeInfo, out: LinkedHashMap<String, TextBlock>) {
-        if (!node.isVisibleToUser) {
-            // Still walk children; visibility flags can be weird in WebViews.
-        }
         val raw = sequenceOf(node.text, node.contentDescription)
             .mapNotNull { it?.toString() }
             .firstOrNull { it.isNotBlank() }
@@ -52,10 +79,19 @@ class TranslateAccessibilityService : AccessibilityService() {
         }
     }
 
+    fun interface ScreenChangeListener {
+        fun onScreenMaybeChanged()
+    }
+
     companion object {
+        private const val DEBOUNCE_MS = 700L
+
         @Volatile
         var instance: TranslateAccessibilityService? = null
             private set
+
+        @Volatile
+        var screenChangeListener: ScreenChangeListener? = null
 
         fun isEnabled(): Boolean = instance != null
     }
@@ -66,6 +102,7 @@ class TranslateAccessibilityService : AccessibilityService() {
     }
 
     override fun onDestroy() {
+        mainHandler.removeCallbacks(notifyRunnable)
         if (instance === this) instance = null
         super.onDestroy()
     }
