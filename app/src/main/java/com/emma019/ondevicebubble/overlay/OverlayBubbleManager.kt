@@ -3,6 +3,7 @@ package com.emma019.ondevicebubble.overlay
 import android.content.Context
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.util.TypedValue
 import android.view.Gravity
@@ -10,10 +11,10 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.graphics.toColorInt
-import com.google.android.material.card.MaterialCardView
 import kotlin.math.abs
 
 class OverlayBubbleManager(private val context: Context) {
@@ -94,17 +95,18 @@ class OverlayBubbleManager(private val context: Context) {
     fun showTranslations(blocks: List<TranslatedBlock>) {
         clearTranslations()
         val density = context.resources.displayMetrics.density
+        val padH = (6 * density).toInt()
+        val padV = (4 * density).toInt()
+
         blocks.forEach { block ->
-            val card = MaterialCardView(context).apply {
-                radius = 8 * density
-                cardElevation = 2 * density
-                setCardBackgroundColor("#F2FFF8E1".toColorInt())
-                setContentPadding(
-                    (6 * density).toInt(),
-                    (4 * density).toInt(),
-                    (6 * density).toInt(),
-                    (4 * density).toInt(),
-                )
+            val bg = GradientDrawable().apply {
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = 8 * density
+                setColor("#F2FFF8E1".toColorInt())
+            }
+            val card = FrameLayout(context).apply {
+                background = bg
+                setPadding(padH, padV, padH, padV)
             }
             val tv = TextView(context).apply {
                 text = block.translated
