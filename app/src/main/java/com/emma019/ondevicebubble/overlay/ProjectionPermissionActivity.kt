@@ -5,13 +5,10 @@ import android.content.Context
 import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 
-/**
- * Tiny trampoline that requests MediaProjection consent, then hands the result
- * to [BubbleOverlayService].
- */
 class ProjectionPermissionActivity : AppCompatActivity() {
     private val launcher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult(),
@@ -23,6 +20,9 @@ class ProjectionPermissionActivity : AppCompatActivity() {
                 putExtra(BubbleOverlayService.EXTRA_RESULT_DATA, result.data)
             }
             startForegroundService(service)
+            Toast.makeText(this, "Overlay started — look for 訳 panel", Toast.LENGTH_LONG).show()
+        } else {
+            Toast.makeText(this, "Screen capture was cancelled", Toast.LENGTH_SHORT).show()
         }
         finish()
     }

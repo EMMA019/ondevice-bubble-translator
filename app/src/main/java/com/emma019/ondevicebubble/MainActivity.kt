@@ -10,7 +10,6 @@ import android.widget.ArrayAdapter
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.emma019.ondevicebubble.databinding.ActivityMainBinding
 import com.emma019.ondevicebubble.overlay.BubbleOverlayService
@@ -25,10 +24,11 @@ import kotlinx.coroutines.withContext
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var engines: List<TranslationEngine>
+    private var pendingOverlayStart = false
 
     private val notificationPermission = registerForActivityResult(
         ActivityResultContracts.RequestPermission(),
-    ) { /* overlay can still run without posts on older paths */ }
+    ) { /* optional */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -55,8 +55,17 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        if (pendingOverlayStart && Settings.canDrawOverlays(this)) {
+            pendingOverlayStart = false
+            startActivity(ProjectionPermissionActivity.intent(this))
+        }
+    }
+
     private fun startOverlayFlow() {
         if (!Settings.canDrawOverlays(this)) {
+            pendingOverlayStart = true
             Toast.makeText(this, R.string.overlay_need_permission, Toast.LENGTH_LONG).show()
             startActivity(
                 Intent(

@@ -8,11 +8,13 @@ import android.util.TypedValue
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.core.graphics.toColorInt
 import com.google.android.material.card.MaterialCardView
+import kotlin.math.abs
 
 class OverlayBubbleManager(private val context: Context) {
     private val windowManager = context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
@@ -34,20 +36,22 @@ class OverlayBubbleManager(private val context: Context) {
     ) {
         removeControls()
         val density = context.resources.displayMetrics.density
-        val pad = (10 * density).toInt()
+        val pad = (14 * density).toInt()
 
         val row = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(pad, pad, pad, pad)
-            setBackgroundColor("#CC1B6BFF".toColorInt())
+            setBackgroundColor("#E61B6BFF".toColorInt())
+            minimumWidth = (56 * density).toInt()
         }
 
         fun chip(label: String, click: () -> Unit): TextView =
             TextView(context).apply {
                 text = label
                 setTextColor(Color.WHITE)
-                setTextSize(TypedValue.COMPLEX_UNIT_SP, 16f)
+                setTextSize(TypedValue.COMPLEX_UNIT_SP, 18f)
                 setPadding(pad, pad, pad, pad)
+                gravity = Gravity.CENTER
                 setOnClickListener { click() }
             }
 
@@ -63,9 +67,9 @@ class OverlayBubbleManager(private val context: Context) {
                 WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT,
         ).apply {
-            gravity = Gravity.TOP or Gravity.END
-            x = (8 * density).toInt()
-            y = (120 * density).toInt()
+            gravity = Gravity.TOP or Gravity.START
+            x = (context.resources.displayMetrics.widthPixels - (72 * density).toInt())
+            y = (160 * density).toInt()
         }
 
         enableDrag(row, params)
@@ -135,25 +139,39 @@ class OverlayBubbleManager(private val context: Context) {
     }
 
     private fun enableDrag(view: View, params: WindowManager.LayoutParams) {
-        var lastX = 0
-        var lastY = 0
+        val slop = ViewConfiguration.get(context).scaledTouchSlop
+        var downX = 0f
+        var downY = 0f
+        var startX = 0
+        var startY = 0
+        var dragging = false
+
         view.setOnTouchListener { v, event ->
-            when (event.action) {
+            when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
-                    lastX = event.rawX.toInt()
-                    lastY = event.rawY.toInt()
-                    true
+                    downX = event.rawX
+                    downY = event.rawY
+                    startX = params.x
+                    startY = params.y
+                    dragging = false
+                    false
                 }
                 MotionEvent.ACTION_MOVE -> {
-                    val dx = event.rawX.toInt() - lastX
-                    val dy = event.rawY.toInt() - lastY
-                    params.x -= dx
-                    params.y += dy
-                    lastX = event.rawX.toInt()
-                    lastY = event.rawY.toInt()
-                    windowManager.updateViewLayout(v, params)
-                    true
+                    val dx = (event.rawX - downX).toInt()
+                    val dy = (event.rawY - downY).toInt()
+                    if (!dragging && (abs(dx) > slop || abs(dy) > slop)) {
+                        dragging = true
+                    }
+                    if (dragging) {
+                        params.x = startX + dx
+                        params.y = startY + dy
+                        windowManager.updateViewLayout(v, params)
+                        true
+                    } else {
+                        false
+                    }
                 }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> dragging
                 else -> false
             }
         }
