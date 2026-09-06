@@ -15,13 +15,23 @@
         app:layout_constraintTop_toTopOf="parent" />
 
     <TextView
+        android:id="@+id/phase2Hint"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="4dp"
+        android:text="@string/phase2_hint"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/toolbar" />
+
+    <TextView
         android:id="@+id/labelEngine"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
         android:layout_marginTop="8dp"
         android:text="@string/label_engine"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/toolbar" />
+        app:layout_constraintTop_toBottomOf="@id/phase2Hint" />
 
     <Spinner
         android:id="@+id/engineSpinner"
@@ -31,6 +41,30 @@
         app:layout_constraintStart_toStartOf="parent"
         app:layout_constraintTop_toBottomOf="@id/labelEngine" />
 
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/startOverlayButton"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:layout_marginEnd="4dp"
+        android:text="@string/btn_start_overlay"
+        app:layout_constraintEnd_toStartOf="@id/stopOverlayButton"
+        app:layout_constraintHorizontal_weight="1"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/engineSpinner" />
+
+    <com.google.android.material.button.MaterialButton
+        android:id="@+id/stopOverlayButton"
+        style="@style/Widget.Material3.Button.OutlinedButton"
+        android:layout_width="0dp"
+        android:layout_height="wrap_content"
+        android:layout_marginStart="4dp"
+        android:text="@string/btn_stop_overlay"
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_weight="1"
+        app:layout_constraintStart_toEndOf="@id/startOverlayButton"
+        app:layout_constraintTop_toTopOf="@id/startOverlayButton" />
+
     <com.google.android.material.textfield.TextInputLayout
         android:id="@+id/inputLayout"
         android:layout_width="0dp"
@@ -39,9 +73,9 @@
         android:hint="@string/hint_source"
         app:layout_constraintBottom_toTopOf="@id/translateButton"
         app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintHeight_percent="0.28"
+        app:layout_constraintHeight_percent="0.22"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@id/engineSpinner"
+        app:layout_constraintTop_toBottomOf="@id/startOverlayButton"
         app:layout_constraintVertical_bias="0">
 
         <com.google.android.material.textfield.TextInputEditText

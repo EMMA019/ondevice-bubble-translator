@@ -1,11 +1,20 @@
 package com.emma019.ondevicebubble
 
+import android.Manifest
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.provider.Settings
 import android.widget.ArrayAdapter
 import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
 import com.emma019.ondevicebubble.databinding.ActivityMainBinding
+import com.emma019.ondevicebubble.overlay.BubbleOverlayService
+import com.emma019.ondevicebubble.overlay.ProjectionPermissionActivity
 import com.emma019.ondevicebubble.translate.EngineRegistry
 import com.emma019.ondevicebubble.translate.TextPreprocessor
 import com.emma019.ondevicebubble.translate.TranslationEngine
@@ -16,6 +25,10 @@ import kotlinx.coroutines.withContext
 class MainActivity : AppCompatActivity() {
     private lateinit var binding: ActivityMainBinding
     private lateinit var engines: List<TranslationEngine>
+
+    private val notificationPermission = registerForActivityResult(
+        ActivityResultContracts.RequestPermission(),
+    ) { /* overlay can still run without posts on older paths */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -31,6 +44,29 @@ class MainActivity : AppCompatActivity() {
         )
 
         binding.translateButton.setOnClickListener { runTranslate() }
+        binding.startOverlayButton.setOnClickListener { startOverlayFlow() }
+        binding.stopOverlayButton.setOnClickListener {
+            BubbleOverlayService.stop(this)
+            Toast.makeText(this, R.string.btn_stop_overlay, Toast.LENGTH_SHORT).show()
+        }
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    private fun startOverlayFlow() {
+        if (!Settings.canDrawOverlays(this)) {
+            Toast.makeText(this, R.string.overlay_need_permission, Toast.LENGTH_LONG).show()
+            startActivity(
+                Intent(
+                    Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    Uri.parse("package:$packageName"),
+                ),
+            )
+            return
+        }
+        startActivity(ProjectionPermissionActivity.intent(this))
     }
 
     private fun runTranslate() {
