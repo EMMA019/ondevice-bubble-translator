@@ -46,9 +46,11 @@ dependencies {
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // Baseline on-device NMT (compare against)
+    // Baseline on-device NMT (quality bar to beat)
     implementation("com.google.mlkit:translate:17.0.3")
 
-    // Optional Local LLM path (MediaPipe GenAI). Model must be supplied separately.
-    implementation("com.google.mediapipe:tasks-genai:0.10.14")
+    // Optional Local LLM path (MediaPipe GenAI). Supply .task model separately.
+    implementation("com.google.mediapipe:tasks-genai:0.10.27")
+
+    testImplementation("junit:junit:4.13.2")
 }

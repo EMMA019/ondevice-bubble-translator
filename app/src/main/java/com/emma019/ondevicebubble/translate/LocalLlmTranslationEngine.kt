@@ -2,6 +2,7 @@ package com.emma019.ondevicebubble.translate
 
 import android.content.Context
 import com.google.mediapipe.tasks.genai.llminference.LlmInference
+import com.google.mediapipe.tasks.genai.llminference.LlmInferenceSession
 import java.io.File
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -9,6 +10,9 @@ import kotlinx.coroutines.withContext
 /**
  * Higher-quality on-device path via MediaPipe LLM Inference.
  * Requires a `.task` model at [defaultModelFile] (not bundled — too large for git).
+ *
+ * API note: MediaPipe GenAI is maintenance-mode; LiteRT-LM is the longer-term path.
+ * We keep MediaPipe here because it is the most documented Android on-device LLM today.
  */
 class LocalLlmTranslationEngine(
     private val context: Context,
@@ -50,7 +54,18 @@ class LocalLlmTranslationEngine(
         prepare {}
         val client = llm ?: error("Local LLM not prepared")
         val prompt = buildPrompt(text, sourceLang, targetLang)
-        client.generateResponse(prompt).trim()
+
+        val sessionOptions = LlmInferenceSession.LlmInferenceSessionOptions.builder()
+            .setTemperature(0.2f)
+            .setTopK(40)
+            .build()
+        val session = LlmInferenceSession.createFromOptions(client, sessionOptions)
+        try {
+            session.addQueryChunk(prompt)
+            session.generateResponse().trim()
+        } finally {
+            session.close()
+        }
     }
 
     private fun buildPrompt(text: String, sourceLang: String, targetLang: String): String {
