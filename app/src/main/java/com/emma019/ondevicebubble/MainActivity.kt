@@ -14,6 +14,7 @@ import androidx.lifecycle.lifecycleScope
 import com.emma019.ondevicebubble.accessibility.TranslateAccessibilityService
 import com.emma019.ondevicebubble.databinding.ActivityMainBinding
 import com.emma019.ondevicebubble.overlay.BubbleOverlayService
+import com.emma019.ondevicebubble.reader.ReaderActivity
 import com.emma019.ondevicebubble.translate.EngineRegistry
 import com.emma019.ondevicebubble.translate.LanguageDetector
 import com.emma019.ondevicebubble.translate.TextPreprocessor
@@ -44,6 +45,9 @@ class MainActivity : AppCompatActivity() {
             engines.map { it.displayName },
         )
 
+        binding.openReaderButton.setOnClickListener {
+            startActivity(Intent(this, ReaderActivity::class.java))
+        }
         binding.translateButton.setOnClickListener { runTranslate() }
         binding.startOverlayButton.setOnClickListener { startOverlayFlow() }
         binding.stopOverlayButton.setOnClickListener {

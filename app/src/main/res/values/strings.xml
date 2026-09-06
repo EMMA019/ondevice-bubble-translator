@@ -3,8 +3,9 @@
     <string name="hint_source">Paste any language text</string>
     <string name="hint_output">Japanese translation appears here</string>
     <string name="btn_translate">Translate</string>
-    <string name="btn_start_overlay">Start bubble overlay</string>
-    <string name="btn_stop_overlay">Stop overlay</string>
+    <string name="btn_open_reader">読書ブラウザを開く</string>
+    <string name="btn_start_overlay">バブル（他アプリ用）</string>
+    <string name="btn_stop_overlay">バブル停止</string>
     <string name="engine_mlkit">ML Kit (multi-lang)</string>
     <string name="engine_local_llm">Local LLM (MediaPipe)</string>
     <string name="label_engine">Engine</string>
@@ -32,5 +33,18 @@
     <string name="overlay_started_a11y">Overlay started — auto translate enabled</string>
     <string name="a11y_required">Turn on OnDevice Translate Lab in Accessibility settings</string>
     <string name="a11y_service_description">Reads on-screen text so the bubble translator can auto-translate without screenshots. Used only while enabled.</string>
-    <string name="phase2_hint">Auto=ML Kit. Manual 訳 uses Local LLM on long blocks. 磨 polishes with LLM. Put gemma.task in files/models/.</string>
+    <string name="phase2_hint">本命は読書ブラウザ（本文をその場で日本語に）。バブルは他アプリ用の簡易モード。</string>
+
+    <string name="reader_title">読書ブラウザ</string>
+    <string name="reader_url_hint">URL または検索</string>
+    <string name="reader_go">移動</string>
+    <string name="reader_auto_on">自動訳ON</string>
+    <string name="reader_auto_off">自動訳OFF</string>
+    <string name="reader_ready">準備完了</string>
+    <string name="reader_loading">読み込み中…</string>
+    <string name="reader_loaded">ページ読込完了</string>
+    <string name="reader_collecting">本文を収集中…</string>
+    <string name="reader_translating">翻訳中（%1$d 箇所）…</string>
+    <string name="reader_done">日本語に置換した（%1$d）</string>
+    <string name="reader_no_text">本文テキストが見つからない</string>
 </resources>
