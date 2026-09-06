@@ -98,10 +98,7 @@ class BubbleOverlayService : Service() {
             val prepared = withContext(Dispatchers.Default) {
                 limited.mapNotNull { block ->
                     val lang = runCatching { detector.detect(block.text) }.getOrDefault("und")
-                    if (lang == "ja" || lang == "und") {
-                        // Skip Japanese; keep und for a best-effort en translate below.
-                        if (lang == "ja") return@mapNotNull null
-                    }
+                    if (lang == "ja") return@mapNotNull null
                     val source = if (lang == "und") "en" else lang
                     if (engine.mapLang(source) == null) return@mapNotNull null
                     block to source
@@ -159,8 +156,6 @@ class BubbleOverlayService : Service() {
                 notification,
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
             )
-        } else if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(NOTIFICATION_ID, notification, 0)
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
