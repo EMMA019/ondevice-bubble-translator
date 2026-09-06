@@ -3,6 +3,8 @@
     <string name="hint_source">English source text</string>
     <string name="hint_output">Translation appears here</string>
     <string name="btn_translate">Translate</string>
+    <string name="btn_start_overlay">Start bubble overlay</string>
+    <string name="btn_stop_overlay">Stop overlay</string>
     <string name="engine_mlkit">ML Kit (baseline)</string>
     <string name="engine_local_llm">Local LLM (MediaPipe)</string>
     <string name="label_engine">Engine</string>
@@ -12,4 +14,11 @@
     <string name="status_done">Done (%1$d ms)</string>
     <string name="error_empty">Enter some text first.</string>
     <string name="error_no_model">Local LLM model not found. Place a MediaPipe .task file at files/models/gemma.task (see README).</string>
+    <string name="overlay_notification_title">Bubble translator running</string>
+    <string name="overlay_notification_text">Tap the floating bubble to translate the screen</string>
+    <string name="overlay_need_permission">Allow display over other apps, then try again.</string>
+    <string name="overlay_bubble_label">訳</string>
+    <string name="overlay_clear_label">消</string>
+    <string name="a11y_service_description">Optional: read on-screen text nodes for faster translation without OCR. Used only while you enable it.</string>
+    <string name="phase2_hint">Phase 2: grant overlay + screen capture, then tap 訳 on the floating bubble.</string>
 </resources>
